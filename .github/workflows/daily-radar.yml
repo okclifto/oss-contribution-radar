@@ -7,6 +7,8 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
+  actions: write
 
 concurrency:
   group: daily-contribution-radar
@@ -51,7 +53,13 @@ jobs:
             cat REPORT.md >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - name: Commit changed report as GitHub Actions
+      # main requires passing checks, so the report goes through a pull request.
+      # Pull requests opened with GITHUB_TOKEN do not trigger pull_request workflows,
+      # so CI is started explicitly on the branch; its results attach to the same commit.
+      - name: Open pull request for changed report
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: radar/refresh
         run: |
           if git diff --quiet -- REPORT.md; then
             echo "Report is unchanged."
@@ -60,6 +68,16 @@ jobs:
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$BRANCH"
           git add REPORT.md
           git commit -m "chore: refresh contribution radar"
-          git push
+          git push --force origin "$BRANCH"
+
+          gh workflow run ci.yml --ref "$BRANCH"
+
+          if [ -z "$(gh pr list --head "$BRANCH" --state open --json number --jq '.[].number')" ]; then
+            gh pr create --base main --head "$BRANCH" \
+              --title "chore: refresh contribution radar" \
+              --body "Automated daily refresh of REPORT.md. Merges automatically once checks pass."
+          fi
+          gh pr merge "$BRANCH" --auto --squash
