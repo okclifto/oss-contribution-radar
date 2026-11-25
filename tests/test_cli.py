@@ -8,7 +8,8 @@ from pathlib import Path
 import pytest
 
 from contribution_radar import cli
-from contribution_radar.models import Candidate, RepositoryTarget
+from contribution_radar.models import RepositoryScan, RepositoryTarget, ScanResult, ScanStatus
+from contribution_radar.service import ScanObserver
 
 
 def write_json(path: Path, payload: object) -> None:
@@ -90,16 +91,16 @@ def test_parse_args_applies_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert args.limit == 10
 
 
-def test_main_orchestrates_generation(
+def install_fake_radar(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """Connect configuration, discovery, rendering, and persistence."""
+    scans: list[RepositoryScan],
+) -> Path:
+    """Point the CLI at temp files and a radar that reports the given outcomes."""
 
     config = tmp_path / "repositories.json"
     output = tmp_path / "REPORT.md"
-    write_json(config, {"repositories": [{"name": "owner/repo"}]})
+    write_json(config, {"repositories": [{"name": scan.name} for scan in scans]})
     monkeypatch.setattr(
         cli,
         "parse_args",
@@ -114,23 +115,85 @@ def test_main_orchestrates_generation(
 
             assert gateway is not None
 
-        def discover(
+        def scan(
             self,
             targets: list[RepositoryTarget],
             limit: int,
             now: object,
-        ) -> list[Candidate]:
-            """Return no candidates after validating controller inputs."""
+            on_repository: ScanObserver,
+        ) -> ScanResult:
+            """Validate controller inputs and replay canned outcomes."""
 
-            assert targets == [RepositoryTarget("owner/repo")]
+            assert [target.name for target in targets] == [scan.name for scan in scans]
             assert limit == 3
             assert now is not None
-            return []
+            for scan in scans:
+                on_repository(scan)
+            return ScanResult(candidates=(), repositories=tuple(scans))
 
     monkeypatch.setattr(cli, "ContributionRadar", FakeRadar)
+    return output
+
+
+def test_main_orchestrates_generation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Connect configuration, scanning, rendering, and persistence with progress output."""
+
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    output = install_fake_radar(
+        monkeypatch,
+        tmp_path,
+        [
+            RepositoryScan("owner/repo", ScanStatus.SCANNED, "0 open items checked, 0 eligible"),
+            RepositoryScan("owner/down", ScanStatus.FAILED, "HTTP Error 502"),
+        ],
+    )
 
     cli.main()
 
-    assert output.exists()
+    out = capsys.readouterr().out
     assert "No unassigned" in output.read_text(encoding="utf-8")
-    assert "Wrote 0 opportunities" in capsys.readouterr().out
+    assert "Scanning 2 repositories" in out
+    assert "✓ owner/repo: scanned" in out
+    assert "✗ owner/down: failed (HTTP Error 502)" in out
+    assert "Scanned 1/2 repositories (0 skipped, 1 failed)" in out
+    assert "::error" not in out
+
+
+def test_main_fails_when_every_repository_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Fail the run on a total outage, after still writing the diagnostic report."""
+
+    output = install_fake_radar(
+        monkeypatch,
+        tmp_path,
+        [RepositoryScan("owner/down", ScanStatus.FAILED, "network unreachable")],
+    )
+
+    with pytest.raises(SystemExit, match="Every repository scan failed"):
+        cli.main()
+
+    assert "❌ failed" in output.read_text(encoding="utf-8")
+
+
+def test_report_scan_emits_github_actions_annotations(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Annotate failures as errors and skips as warnings, escaping multi-line details."""
+
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+
+    cli.report_scan(RepositoryScan("owner/a", ScanStatus.FAILED, "100% broken\nretry"))
+    cli.report_scan(RepositoryScan("owner/b", ScanStatus.SKIPPED, "archived"))
+    cli.report_scan(RepositoryScan("owner/c", ScanStatus.SCANNED, "fine"))
+
+    lines = capsys.readouterr().out.splitlines()
+    assert "::error title=Repository scan failed::owner/a: 100%25 broken%0Aretry" in lines
+    assert "::warning title=Repository skipped::owner/b: archived" in lines
+    assert not any(line.startswith("::") and "owner/c" in line for line in lines)

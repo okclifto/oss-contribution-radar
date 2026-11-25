@@ -4,23 +4,38 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+# A new push to the same PR or branch supersedes the run still in progress.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   quality:
+    name: quality (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
+    strategy:
+      fail-fast: false
+      matrix:
+        # Oldest supported (pyproject requires-python) through the newest release.
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+
     steps:
       - name: Check out repository
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v7
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v7
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
 
       - name: Set up uv
         uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
@@ -42,5 +57,6 @@ jobs:
       - name: Test with coverage
         run: uv run pytest
 
+      # The project itself is not on PyPI, so skip it rather than log a skip notice.
       - name: Audit dependencies
-        run: uv run pip-audit
+        run: uv run pip-audit --skip-editable

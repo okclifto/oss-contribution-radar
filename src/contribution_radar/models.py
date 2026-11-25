@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import datetime
+from enum import StrEnum
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,3 +55,34 @@ class Candidate:
     issue: Issue
     score: float
     reasons: tuple[str, ...]
+
+
+class ScanStatus(StrEnum):
+    """Outcome of scanning one configured repository."""
+
+    SCANNED = "scanned"
+    SKIPPED = "skipped"
+    FAILED = "failed"
+
+
+@dataclass(frozen=True, slots=True)
+class RepositoryScan:
+    """What happened when one repository target was scanned."""
+
+    name: str
+    status: ScanStatus
+    detail: str
+    eligible: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class ScanResult:
+    """Ranked candidates plus a per-repository record of the scan."""
+
+    candidates: tuple[Candidate, ...]
+    repositories: tuple[RepositoryScan, ...]
+
+    def count(self, status: ScanStatus) -> int:
+        """Return how many repositories finished with the given status."""
+
+        return sum(1 for scan in self.repositories if scan.status is status)

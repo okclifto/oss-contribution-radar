@@ -4,10 +4,22 @@ from __future__ import annotations
 
 import math
 import re
+from collections.abc import Callable
 from datetime import UTC, datetime
 
-from contribution_radar.models import Candidate, Issue, PullRequest, Repository, RepositoryTarget
-from contribution_radar.ports import RepositoryGateway
+from contribution_radar.models import (
+    Candidate,
+    Issue,
+    PullRequest,
+    Repository,
+    RepositoryScan,
+    RepositoryTarget,
+    ScanResult,
+    ScanStatus,
+)
+from contribution_radar.ports import RepositoryGateway, RepositoryGatewayError
+
+ScanObserver = Callable[[RepositoryScan], None]
 
 CONTRIBUTION_LABEL_WEIGHTS = {
     "good first issue": 55.0,
@@ -40,21 +52,33 @@ class ContributionRadar:
     ) -> list[Candidate]:
         """Return the highest-quality unassigned opportunities."""
 
+        return list(self.scan(targets, limit=limit, now=now).candidates)
+
+    def scan(
+        self,
+        targets: list[RepositoryTarget],
+        limit: int = 10,
+        now: datetime | None = None,
+        on_repository: ScanObserver | None = None,
+    ) -> ScanResult:
+        """Scan every target, isolating failures so one repository cannot abort the run.
+
+        ``on_repository`` is called as soon as each repository finishes, which lets
+        callers report progress while a long scan is still running.
+        """
+
         if not 1 <= limit <= 50:
             raise ValueError("limit must be between 1 and 50")
 
         evaluated_at = now or datetime.now(UTC)
         candidates: list[Candidate] = []
+        scans: list[RepositoryScan] = []
         for target in targets:
-            repository = self._gateway.get_repository(target.name)
-            if repository.archived or repository.stars < target.minimum_stars:
-                continue
-
-            pull_requests = self._gateway.list_open_pull_requests(target.name)
-            for issue in self._gateway.list_open_issues(target.name):
-                candidate = self._evaluate(repository, issue, pull_requests, evaluated_at)
-                if candidate is not None:
-                    candidates.append(candidate)
+            repository_candidates, scan = self._scan_repository(target, evaluated_at)
+            candidates.extend(repository_candidates)
+            scans.append(scan)
+            if on_repository is not None:
+                on_repository(scan)
 
         candidates.sort(
             key=lambda candidate: (
@@ -63,7 +87,42 @@ class ContributionRadar:
                 candidate.issue.number,
             )
         )
-        return candidates[:limit]
+        return ScanResult(candidates=tuple(candidates[:limit]), repositories=tuple(scans))
+
+    def _scan_repository(
+        self,
+        target: RepositoryTarget,
+        now: datetime,
+    ) -> tuple[list[Candidate], RepositoryScan]:
+        """Scan one repository, converting data-access errors into a failed outcome."""
+
+        try:
+            repository = self._gateway.get_repository(target.name)
+            if repository.archived:
+                return [], RepositoryScan(target.name, ScanStatus.SKIPPED, "archived")
+            if repository.stars < target.minimum_stars:
+                return [], RepositoryScan(
+                    target.name,
+                    ScanStatus.SKIPPED,
+                    f"{repository.stars:,} stars is below the {target.minimum_stars:,} minimum",
+                )
+
+            pull_requests = self._gateway.list_open_pull_requests(target.name)
+            issues = self._gateway.list_open_issues(target.name)
+        except (RepositoryGatewayError, ValueError) as error:
+            return [], RepositoryScan(target.name, ScanStatus.FAILED, str(error))
+
+        candidates = [
+            candidate
+            for issue in issues
+            if (candidate := self._evaluate(repository, issue, pull_requests, now)) is not None
+        ]
+        return candidates, RepositoryScan(
+            target.name,
+            ScanStatus.SCANNED,
+            f"{len(issues)} open items checked, {len(candidates)} eligible",
+            eligible=len(candidates),
+        )
 
     def _evaluate(
         self,

@@ -5,6 +5,10 @@ from typing import Protocol
 from contribution_radar.models import Issue, PullRequest, Repository
 
 
+class RepositoryGatewayError(RuntimeError):
+    """Raised by a gateway when one repository's data cannot be retrieved."""
+
+
 class RepositoryGateway(Protocol):
     """Interface required by the contribution-ranking service."""
 

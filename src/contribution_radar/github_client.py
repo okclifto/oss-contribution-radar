@@ -10,12 +10,13 @@ from datetime import datetime
 from typing import Any, cast
 
 from contribution_radar.models import Issue, PullRequest, Repository
+from contribution_radar.ports import RepositoryGatewayError
 
 REPOSITORY_NAME = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 GITHUB_API_URL = "https://api.github.com"
 
 
-class GitHubApiError(RuntimeError):
+class GitHubApiError(RepositoryGatewayError):
     """Raised when GitHub cannot provide valid repository data."""
 
 

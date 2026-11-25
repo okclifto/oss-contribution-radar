@@ -19,10 +19,10 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v7
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v7
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
 
@@ -39,8 +39,17 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: uv run contribution-radar
 
+      # Runs even when generation fails so partial or total scan failures are visible.
+      # The report always carries a fresh timestamp, so an unchanged file means it
+      # was never rewritten and would only show stale results.
       - name: Publish workflow summary
-        run: cat REPORT.md >> "$GITHUB_STEP_SUMMARY"
+        if: ${{ !cancelled() }}
+        run: |
+          if git diff --quiet -- REPORT.md; then
+            echo "REPORT.md was not regenerated; check the 'Generate report' log." >> "$GITHUB_STEP_SUMMARY"
+          else
+            cat REPORT.md >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Commit changed report as GitHub Actions
         run: |

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from contribution_radar.github_client import GitHubClient
-from contribution_radar.models import RepositoryTarget
+from contribution_radar.models import RepositoryScan, RepositoryTarget, ScanStatus
 from contribution_radar.report import render_report
 from contribution_radar.service import ContributionRadar
 
@@ -87,17 +87,51 @@ def write_report(path: Path, content: str) -> None:
     temporary_path.replace(path)
 
 
+def _escape_workflow_data(value: str) -> str:
+    """Escape text for a GitHub Actions workflow command message."""
+
+    return value.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+
+def report_scan(scan: RepositoryScan) -> None:
+    """Print one repository's outcome, with an Actions annotation when relevant."""
+
+    symbol = {ScanStatus.SCANNED: "✓", ScanStatus.SKIPPED: "-", ScanStatus.FAILED: "✗"}
+    print(f"{symbol[scan.status]} {scan.name}: {scan.status} ({scan.detail})", flush=True)
+
+    if os.getenv("GITHUB_ACTIONS") != "true" or scan.status is ScanStatus.SCANNED:
+        return
+    level = "error" if scan.status is ScanStatus.FAILED else "warning"
+    title = "Repository scan failed" if level == "error" else "Repository skipped"
+    message = _escape_workflow_data(f"{scan.name}: {scan.detail}")
+    print(f"::{level} title={title}::{message}", flush=True)
+
+
 def main() -> None:
-    """Generate the daily contribution report."""
+    """Generate the daily contribution report.
+
+    Exits with status 1 only when every repository failed, so a partial outage still
+    publishes a report while a total outage fails the workflow visibly.
+    """
 
     args = parse_args()
     targets = load_targets(args.config)
     generated_at = datetime.now(UTC).replace(microsecond=0)
     radar = ContributionRadar(GitHubClient(token=os.getenv("GITHUB_TOKEN")))
-    candidates = radar.discover(targets, limit=args.limit, now=generated_at)
-    report = render_report(candidates, generated_at, scanned_repositories=len(targets))
+
+    print(f"Scanning {len(targets)} repositories from {args.config}", flush=True)
+    result = radar.scan(targets, limit=args.limit, now=generated_at, on_repository=report_scan)
+    report = render_report(result.candidates, generated_at, result.repositories)
     write_report(args.output, report)
-    print(f"Wrote {len(candidates)} opportunities to {args.output}")
+
+    failed = result.count(ScanStatus.FAILED)
+    print(
+        f"Scanned {result.count(ScanStatus.SCANNED)}/{len(targets)} repositories "
+        f"({result.count(ScanStatus.SKIPPED)} skipped, {failed} failed). "
+        f"Wrote {len(result.candidates)} opportunities to {args.output}"
+    )
+    if failed == len(targets):
+        raise SystemExit("Every repository scan failed; see the errors above.")
 
 
 if __name__ == "__main__":

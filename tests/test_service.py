@@ -4,7 +4,15 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from contribution_radar.models import Issue, PullRequest, Repository, RepositoryTarget
+from contribution_radar.github_client import GitHubApiError
+from contribution_radar.models import (
+    Issue,
+    PullRequest,
+    Repository,
+    RepositoryScan,
+    RepositoryTarget,
+    ScanStatus,
+)
 from contribution_radar.service import ContributionRadar
 
 NOW = datetime(2026, 9, 16, tzinfo=UTC)
@@ -24,10 +32,13 @@ class FakeGateway:
         self.repositories = repositories
         self.issues = issues or {}
         self.pull_requests = pull_requests or {}
+        self.failures: dict[str, Exception] = {}
 
     def get_repository(self, name: str) -> Repository:
-        """Return canned repository metadata."""
+        """Return canned repository metadata, or raise a configured failure."""
 
+        if name in self.failures:
+            raise self.failures[name]
         return self.repositories[name]
 
     def list_open_issues(self, name: str) -> list[Issue]:
@@ -160,3 +171,61 @@ def test_discover_rejects_invalid_limits(limit: int) -> None:
 
     with pytest.raises(ValueError, match="between 1 and 50"):
         radar.discover([], limit=limit, now=NOW)
+
+
+def test_scan_isolates_repository_failures() -> None:
+    """Keep scanning after one repository errors and record each outcome in order."""
+
+    healthy = Repository("owner/healthy", "https://github.com/owner/healthy", 10_000, False)
+    gateway = FakeGateway(
+        repositories={"owner/healthy": healthy},
+        issues={"owner/healthy": [make_issue(7), make_issue(8, labels=("question",))]},
+    )
+    gateway.failures = {
+        "owner/rate-limited": GitHubApiError("HTTP Error 403: rate limit exceeded"),
+        "bad name": ValueError("invalid repository name: 'bad name'"),
+    }
+    observed: list[RepositoryScan] = []
+
+    result = ContributionRadar(gateway).scan(
+        [
+            RepositoryTarget("owner/rate-limited"),
+            RepositoryTarget("owner/healthy"),
+            RepositoryTarget("bad name"),
+        ],
+        now=NOW,
+        on_repository=observed.append,
+    )
+
+    assert [candidate.issue.number for candidate in result.candidates] == [7]
+    assert observed == list(result.repositories)
+    assert [(scan.name, scan.status) for scan in result.repositories] == [
+        ("owner/rate-limited", ScanStatus.FAILED),
+        ("owner/healthy", ScanStatus.SCANNED),
+        ("bad name", ScanStatus.FAILED),
+    ]
+    assert "rate limit exceeded" in result.repositories[0].detail
+    assert result.repositories[1].detail == "2 open items checked, 1 eligible"
+    assert result.repositories[1].eligible == 1
+    assert result.count(ScanStatus.FAILED) == 2
+
+
+def test_scan_records_why_repositories_were_skipped() -> None:
+    """Explain archived and below-threshold skips."""
+
+    gateway = FakeGateway(
+        repositories={
+            "owner/archived": Repository("owner/archived", "https://x.test/a", 20_000, True),
+            "owner/small": Repository("owner/small", "https://x.test/s", 99, False),
+        }
+    )
+
+    result = ContributionRadar(gateway).scan(
+        [RepositoryTarget("owner/archived"), RepositoryTarget("owner/small", 1_500)],
+        now=NOW,
+    )
+
+    assert [(scan.status, scan.detail) for scan in result.repositories] == [
+        (ScanStatus.SKIPPED, "archived"),
+        (ScanStatus.SKIPPED, "99 stars is below the 1,500 minimum"),
+    ]
