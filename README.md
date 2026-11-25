@@ -34,9 +34,9 @@ manually. It:
 1. Uses GitHub's read-only public API to collect repository and issue metadata.
 2. Generates `REPORT.md`.
 3. Publishes the report in the workflow summary.
-4. Commits a changed report as `github-actions[bot]`.
+4. Opens a pull request with the changed report as `github-actions[bot]`, which merges once checks pass.
 
-The workflow receives only `contents: write` permission for this repository. It cannot modify
+The workflow can write to this repository and open pull requests in it. It cannot modify
 third-party repositories.
 
 ## Local usage
