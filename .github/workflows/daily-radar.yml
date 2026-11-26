@@ -5,7 +5,7 @@ on:
     - cron: "0 13 * * *"
   workflow_dispatch:
   # Rescan when a merge changes what or how the radar scans. REPORT.md is not
-  # listed, so merging the radar's own report pull request never starts a run.
+  # listed, so the radar's own report commits never start a run.
   push:
     branches: [main]
     paths:
@@ -15,13 +15,12 @@ on:
       - "uv.lock"
       - ".github/workflows/daily-radar.yml"
 
+# The built-in token only reads. The report is pushed with a deploy key instead
+# (see the last step), so nothing in this job can write with GITHUB_TOKEN.
 permissions:
-  contents: write
-  pull-requests: write
-  actions: write
-  # Required to read other repositories' issues. Without it, a token that has
-  # pull-requests access gets only pull requests back from the issues endpoint,
-  # so every scan silently finds nothing.
+  contents: read
+  # Required to read other repositories' issues. Without it, the issues
+  # endpoint can return only pull requests and every scan finds nothing.
   issues: read
 
 concurrency:
@@ -35,8 +34,12 @@ jobs:
     timeout-minutes: 20
 
     steps:
+      # No credentials are left in the checkout, so the report generator and its
+      # dependencies cannot push.
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -48,13 +51,15 @@ jobs:
         with:
           enable-cache: true
 
+      # The radar has no runtime dependencies. Skipping the dev group keeps all
+      # third-party packages (and any startup code they ship) out of this job.
       - name: Install locked dependencies
-        run: uv sync --locked
+        run: uv sync --locked --no-dev
 
       - name: Generate report
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: uv run contribution-radar
+        run: uv run --locked --no-dev contribution-radar
 
       # Runs even when generation fails so partial or total scan failures are visible.
       # The report always carries a fresh timestamp, so an unchanged file means it
@@ -68,31 +73,62 @@ jobs:
             cat REPORT.md >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      # main requires passing checks, so the report goes through a pull request.
-      # Pull requests opened with GITHUB_TOKEN do not trigger pull_request workflows,
-      # so CI is started explicitly on the branch; its results attach to the same commit.
-      - name: Open pull request for changed report
+      # main requires the ci check, which the deploy key bypasses through the
+      # guardrails ruleset. The bypass is only safe because this step refuses to
+      # push anything except REPORT.md. The key exists only inside this step.
+      - name: Commit report to main
+        if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
         env:
-          GH_TOKEN: ${{ github.token }}
-          BRANCH: radar/refresh
+          DEPLOY_KEY: ${{ secrets.RADAR_DEPLOY_KEY }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
-          if git diff --quiet -- REPORT.md; then
+          # Use only system tools, so nothing an earlier step put on PATH (via
+          # GITHUB_PATH) runs while the key is present, and ignore git hooks.
+          export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+          git() { command git -c core.hooksPath=/dev/null "$@"; }
+
+          changed="$( { git diff --name-only; git ls-files --others --exclude-standard; } | sort -u)"
+          if [ -z "$changed" ]; then
             echo "Report is unchanged."
             exit 0
           fi
+          if [ "$changed" != "REPORT.md" ]; then
+            echo "::error title=Refusing to push::Only REPORT.md may change; found:%0A${changed//$'\n'/%0A}"
+            exit 1
+          fi
+          if [ -z "$DEPLOY_KEY" ]; then
+            echo "::error title=Missing deploy key::Set the RADAR_DEPLOY_KEY secret; see the README."
+            exit 1
+          fi
+
+          ssh_dir="$(mktemp -d)"
+          trap 'rm -rf "$ssh_dir"' EXIT
+          printf '%s\n' "$DEPLOY_KEY" > "$ssh_dir/key"
+          chmod 600 "$ssh_dir/key"
+          # Pin GitHub's host keys from its API (fetched over HTTPS) rather than
+          # trusting whatever answers on first SSH connection.
+          curl -fsS https://api.github.com/meta |
+            jq -r '.ssh_keys[] | "github.com " + .' > "$ssh_dir/known_hosts"
+          export GIT_SSH_COMMAND="ssh -i $ssh_dir/key -o IdentitiesOnly=yes -o UserKnownHostsFile=$ssh_dir/known_hosts -o StrictHostKeyChecking=yes"
+          git remote set-url origin "git@github.com:${GITHUB_REPOSITORY}.git"
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -B "$BRANCH"
           git add REPORT.md
           git commit -m "chore: refresh contribution radar"
-          git push --force origin "$BRANCH"
 
-          gh workflow run ci.yml --ref "$BRANCH"
-
-          if [ -z "$(gh pr list --head "$BRANCH" --state open --json number --jq '.[].number')" ]; then
-            gh pr create --base main --head "$BRANCH" \
-              --title "chore: refresh contribution radar" \
-              --body "Automated daily refresh of REPORT.md. Merges automatically once checks pass."
-          fi
-          gh pr merge "$BRANCH" --auto --squash
+          # main may have moved during the scan. Only this job edits REPORT.md,
+          # so rebasing onto the new main is safe; give up after three tries.
+          for attempt in 1 2 3; do
+            if git push origin "HEAD:$DEFAULT_BRANCH"; then
+              exit 0
+            fi
+            echo "Push rejected (attempt $attempt); rebasing onto $DEFAULT_BRANCH."
+            git pull --rebase origin "$DEFAULT_BRANCH" || { git rebase --abort; break; }
+            if [ "$(git diff --name-only HEAD~1 HEAD)" != "REPORT.md" ]; then
+              echo "::error title=Refusing to push::The rebased commit changes more than REPORT.md."
+              exit 1
+            fi
+          done
+          echo "::error title=Push failed::Could not push the report to $DEFAULT_BRANCH."
+          exit 1
