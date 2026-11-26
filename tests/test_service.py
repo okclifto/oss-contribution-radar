@@ -1,5 +1,6 @@
 """Unit tests for contribution ranking rules."""
 
+import threading
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -342,3 +343,89 @@ def test_scan_skips_pull_request_lookup_without_labeled_issues() -> None:
     assert gateway.issue_requests == [("owner/project", "help wanted")]
     assert gateway.pull_request_requests == []
     assert result.repositories[0].detail == "0 open items under 1 label checked, 0 eligible"
+
+
+def test_parallel_scan_reports_in_configuration_order() -> None:
+    """Report completion order live, but return results in config order."""
+
+    first_may_finish = threading.Event()
+
+    class SlowFirstGateway(FakeGateway):
+        """Hold the first repository until the second has been reported."""
+
+        def get_repository(self, name: str) -> Repository:
+            """Block the first repository until released."""
+
+            if name == "owner/first":
+                assert first_may_finish.wait(timeout=5)
+            return super().get_repository(name)
+
+    gateway = SlowFirstGateway(
+        repositories={
+            "owner/first": Repository("owner/first", "https://x.test/1", 10_000, False),
+            "owner/second": Repository("owner/second", "https://x.test/2", 10_000, False),
+        },
+        issues={"owner/first": [make_issue(1)], "owner/second": [make_issue(2)]},
+    )
+    observed: list[str] = []
+
+    def observe(scan: RepositoryScan) -> None:
+        """Record completion order and release the first repository."""
+
+        observed.append(scan.name)
+        first_may_finish.set()
+
+    result = ContributionRadar(gateway).scan(
+        [RepositoryTarget("owner/first"), RepositoryTarget("owner/second")],
+        now=NOW,
+        on_repository=observe,
+        max_workers=2,
+    )
+
+    assert observed == ["owner/second", "owner/first"]
+    assert [scan.name for scan in result.repositories] == ["owner/first", "owner/second"]
+
+
+def test_parallel_scan_runs_repositories_concurrently_and_isolates_failures() -> None:
+    """Scan several repositories at once, keeping each failure to its own row."""
+
+    all_started = threading.Barrier(3, timeout=5)
+
+    class ConcurrentGateway(FakeGateway):
+        """Proceed only once three repositories are in flight together."""
+
+        def get_repository(self, name: str) -> Repository:
+            """Wait for the other workers, then answer or fail."""
+
+            all_started.wait()
+            return super().get_repository(name)
+
+    gateway = ConcurrentGateway(
+        repositories={
+            name: Repository(name, f"https://x.test/{name}", 10_000, False)
+            for name in ("owner/a", "owner/c")
+        },
+        issues={"owner/a": [make_issue(1)], "owner/c": [make_issue(3)]},
+    )
+    gateway.failures = {"owner/b": GitHubApiError("HTTP Error 502")}
+
+    result = ContributionRadar(gateway).scan(
+        [RepositoryTarget(name) for name in ("owner/a", "owner/b", "owner/c")],
+        now=NOW,
+        max_workers=3,
+    )
+
+    assert [(scan.name, scan.status) for scan in result.repositories] == [
+        ("owner/a", ScanStatus.SCANNED),
+        ("owner/b", ScanStatus.FAILED),
+        ("owner/c", ScanStatus.SCANNED),
+    ]
+    assert sorted(candidate.issue.number for candidate in result.candidates) == [1, 3]
+
+
+@pytest.mark.parametrize("workers", [0, 17])
+def test_scan_rejects_invalid_worker_counts(workers: int) -> None:
+    """Reject concurrency outside the supported range."""
+
+    with pytest.raises(ValueError, match="max_workers"):
+        ContributionRadar(FakeGateway(repositories={})).scan([], now=NOW, max_workers=workers)
