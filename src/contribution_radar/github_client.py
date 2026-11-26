@@ -6,8 +6,11 @@ import gzip
 import http.client
 import json
 import re
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any, cast
 
@@ -18,6 +21,12 @@ REPOSITORY_NAME = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 GITHUB_API_URL = "https://api.github.com"
 PAGE_SIZE = 100
 MAX_LABEL_PAGES = 10
+# Retries per request, shared by rate limits and dropped connections.
+MAX_RETRIES = 2
+TRANSIENT_RETRY_BASE_SECONDS = 2.0
+MAX_RATE_LIMIT_WAIT_SECONDS = 120.0
+# GitHub's guidance when a rate-limited response gives no wait time.
+DEFAULT_RATE_LIMIT_WAIT_SECONDS = 60.0
 
 
 class GitHubApiError(RepositoryGatewayError):
@@ -27,11 +36,24 @@ class GitHubApiError(RepositoryGatewayError):
 class GitHubClient:
     """Fetch public repository data using GitHub's REST API."""
 
-    def __init__(self, token: str | None = None, timeout_seconds: float = 20.0) -> None:
-        """Initialize the adapter with an optional API token."""
+    def __init__(
+        self,
+        token: str | None = None,
+        timeout_seconds: float = 20.0,
+        *,
+        sleep: Callable[[float], None] = time.sleep,
+        clock: Callable[[], float] = time.time,
+    ) -> None:
+        """Initialize the adapter with an optional API token.
+
+        ``sleep`` and ``clock`` are injectable so rate-limit retries can be tested
+        without waiting.
+        """
 
         self._token = token
         self._timeout_seconds = timeout_seconds
+        self._sleep = sleep
+        self._clock = clock
 
     def get_repository(self, name: str) -> Repository:
         """Return popularity and lifecycle metadata for a repository."""
@@ -115,16 +137,72 @@ class GitHubClient:
         if self._token:
             request.add_header("Authorization", f"Bearer {self._token}")
 
+        attempt = 0
+        while True:
+            try:
+                with urllib.request.urlopen(request, timeout=self._timeout_seconds) as response:
+                    body = response.read()
+                    if response.headers.get("Content-Encoding") == "gzip":
+                        body = gzip.decompress(body)
+                    return cast(object, json.loads(body))
+            except urllib.error.HTTPError as error:
+                wait = self._rate_limit_wait(error)
+                if wait is None or attempt == MAX_RETRIES:
+                    raise GitHubApiError(f"GitHub request failed for {path}: {error!r}") from error
+            # OSError covers URL errors, timeouts and connections reset mid-read;
+            # ValueError covers a truncated, non-JSON or corrupt gzip body.
+            except (OSError, http.client.HTTPException, ValueError) as error:
+                if not self._is_transient(error) or attempt == MAX_RETRIES:
+                    raise GitHubApiError(f"GitHub request failed for {path}: {error!r}") from error
+                wait = TRANSIENT_RETRY_BASE_SECONDS * 2**attempt
+            attempt += 1
+            self._sleep(wait)
+
+    @staticmethod
+    def _is_transient(error: Exception) -> bool:
+        """Return whether a failure is a dropped or stalled connection worth retrying.
+
+        Large responses (an open pull request page can exceed 2 MB, and GitHub does
+        not compress it) are the most likely to be cut off mid-transfer.
+        """
+
+        if isinstance(error, urllib.error.URLError):
+            return isinstance(error.reason, (ConnectionError, TimeoutError))
+        return isinstance(error, (ConnectionError, TimeoutError, http.client.IncompleteRead))
+
+    def _rate_limit_wait(self, error: urllib.error.HTTPError) -> float | None:
+        """Return how long to wait before retrying a rate-limited response.
+
+        Follows GitHub's guidance: honor ``Retry-After``, else wait for the reset
+        time when the quota is used up, else wait a minute. Returns ``None`` when
+        the response is not a rate limit or the wait would be too long to be useful.
+        """
+
+        if error.code not in (403, 429):
+            return None
+        headers = error.headers
+        retry_after = headers.get("Retry-After") if headers else None
+        remaining = headers.get("X-RateLimit-Remaining") if headers else None
+        reset = headers.get("X-RateLimit-Reset") if headers else None
+
+        if retry_after is not None and retry_after.isdigit():
+            wait = float(retry_after)
+        elif remaining == "0" and reset is not None and reset.isdigit():
+            wait = max(float(reset) - self._clock(), 0.0) + 1.0
+        elif error.code == 429 or self._mentions_rate_limit(error):
+            wait = DEFAULT_RATE_LIMIT_WAIT_SECONDS
+        else:
+            return None
+        return wait if wait <= MAX_RATE_LIMIT_WAIT_SECONDS else None
+
+    @staticmethod
+    def _mentions_rate_limit(error: urllib.error.HTTPError) -> bool:
+        """Tell a rate-limit 403 apart from a permissions 403 by its message."""
+
         try:
-            with urllib.request.urlopen(request, timeout=self._timeout_seconds) as response:
-                body = response.read()
-                if response.headers.get("Content-Encoding") == "gzip":
-                    body = gzip.decompress(body)
-                return cast(object, json.loads(body))
-        # OSError covers HTTP and URL errors, timeouts and connections reset mid-read;
-        # ValueError covers a truncated, non-JSON or corrupt gzip body.
-        except (OSError, http.client.HTTPException, ValueError) as error:
-            raise GitHubApiError(f"GitHub request failed for {path}: {error!r}") from error
+            return b"rate limit" in error.read().lower()
+        except (OSError, http.client.HTTPException):
+            return False
 
     @staticmethod
     def _validate_repository_name(name: str) -> str:

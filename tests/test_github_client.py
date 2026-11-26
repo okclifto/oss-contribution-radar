@@ -2,6 +2,7 @@
 
 import email.message
 import gzip
+import http.client
 import io
 import json
 import urllib.error
@@ -189,7 +190,7 @@ def test_request_wraps_errors_while_reading_the_body(
     monkeypatch.setattr(urllib.request, "urlopen", lambda request, timeout: body)
 
     with pytest.raises(GitHubApiError, match="GitHub request failed"):
-        GitHubClient()._request("/example")
+        GitHubClient(sleep=lambda seconds: None)._request("/example")
 
 
 def test_client_rejects_malformed_api_payloads(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -208,3 +209,141 @@ def test_client_rejects_malformed_api_payloads(monkeypatch: pytest.MonkeyPatch) 
         client._required_int({}, "count")
     with pytest.raises(GitHubApiError, match="invalid GitHub timestamp"):
         client._parse_datetime("not-a-date")
+
+
+def http_error(code: int, headers: dict[str, str] | None = None, body: bytes = b"") -> Exception:
+    """Build an HTTPError like urlopen raises for a non-2xx response."""
+
+    message = email.message.Message()
+    for key, value in (headers or {}).items():
+        message[key] = value
+    return urllib.error.HTTPError(
+        "https://api.github.com/x", code, "error", message, io.BytesIO(body)
+    )
+
+
+def scripted_client(
+    monkeypatch: pytest.MonkeyPatch, outcomes: list[object]
+) -> tuple[GitHubClient, list[float]]:
+    """Return a client whose requests play back outcomes, recording its sleeps."""
+
+    sleeps: list[float] = []
+
+    def fake_urlopen(request: urllib.request.Request, timeout: float) -> object:
+        """Raise the next scripted error, or return the next response."""
+
+        outcome = outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    return GitHubClient(sleep=sleeps.append, clock=lambda: 1_000.0), sleeps
+
+
+OK = b'{"ok": true}'
+
+
+@pytest.mark.parametrize(
+    "error,wait",
+    [
+        (http_error(429, {"Retry-After": "5"}), 5.0),
+        (http_error(403, {"Retry-After": "7"}), 7.0),
+        (http_error(403, {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "1030"}), 31.0),
+        (http_error(403, body=b'{"message": "You have exceeded a secondary rate limit"}'), 60.0),
+        (http_error(429), 60.0),
+    ],
+)
+def test_request_waits_and_retries_rate_limits(
+    monkeypatch: pytest.MonkeyPatch, error: Exception, wait: float
+) -> None:
+    """Wait as GitHub instructs, then retry the same request."""
+
+    client, sleeps = scripted_client(monkeypatch, [error, FakeResponse(OK)])
+
+    assert client._request("/example") == {"ok": True}
+    assert sleeps == [wait]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        http_error(403, body=b'{"message": "Resource not accessible by integration"}'),
+        urllib.error.HTTPError(
+            "https://api.github.com/x", 403, "error", email.message.Message(), ResetResponse(b"")
+        ),
+        http_error(404),
+        http_error(500, {"Retry-After": "5"}),
+        http_error(403, {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "4600"}),
+    ],
+)
+def test_request_fails_fast_when_waiting_would_not_help(
+    monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    """Do not wait on permission errors, other failures, or an hour-long reset."""
+
+    client, sleeps = scripted_client(monkeypatch, [error])
+
+    with pytest.raises(GitHubApiError, match="GitHub request failed"):
+        client._request("/example")
+    assert sleeps == []
+
+
+def test_request_gives_up_after_the_retry_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stop after two retries so one repository cannot stall the scan."""
+
+    client, sleeps = scripted_client(
+        monkeypatch, [http_error(429, {"Retry-After": "1"}) for _ in range(3)]
+    )
+
+    with pytest.raises(GitHubApiError, match="429"):
+        client._request("/example")
+    assert sleeps == [1.0, 1.0]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        ConnectionResetError(54, "Connection reset by peer"),
+        http.client.IncompleteRead(b"partial", 100),
+        TimeoutError("The read operation timed out"),
+        urllib.error.URLError(ConnectionRefusedError(61, "Connection refused")),
+    ],
+)
+def test_request_retries_dropped_connections_with_backoff(
+    monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    """Retry a connection that drops or stalls, waiting longer each time."""
+
+    client, sleeps = scripted_client(monkeypatch, [error, error, FakeResponse(OK)])
+
+    assert client._request("/example") == {"ok": True}
+    assert sleeps == [2.0, 4.0]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [urllib.error.URLError("Name or service not known"), ValueError("bad JSON")],
+)
+def test_request_does_not_retry_permanent_failures(
+    monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    """Fail at once on DNS errors and malformed bodies, which a retry won't fix."""
+
+    client, sleeps = scripted_client(monkeypatch, [error])
+
+    with pytest.raises(GitHubApiError):
+        client._request("/example")
+    assert sleeps == []
+
+
+def test_request_gives_up_on_a_connection_that_keeps_dropping(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Report the failure after the retry budget is spent."""
+
+    client, sleeps = scripted_client(monkeypatch, [ConnectionResetError() for _ in range(3)])
+
+    with pytest.raises(GitHubApiError, match="ConnectionResetError"):
+        client._request("/example")
+    assert sleeps == [2.0, 4.0]
