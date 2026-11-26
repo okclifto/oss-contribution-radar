@@ -17,7 +17,8 @@ concurrency:
 jobs:
   generate:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # About 9 seconds per repository; leaves headroom for ~60 targets.
+    timeout-minutes: 20
 
     steps:
       - name: Check out repository

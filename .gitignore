@@ -13,3 +13,6 @@ dist/
 build/
 *.egg-info/
 coverage.xml
+
+# Personal working notes (surveys, drafts); decisions belong in config/.
+notes/

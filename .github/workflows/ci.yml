@@ -41,7 +41,7 @@ jobs:
           PUSH_BEFORE_SHA: ${{ github.event.before }}
         run: |
           # Files the Python checks depend on. Keep broad: a missed file skips CI.
-          pattern='^(src/|tests/|uv\.lock$|\.python-version$|\.github/workflows/ci\.yml$)|\.(py|toml|cfg|ini)$'
+          pattern='^(src/|tests/|config/|uv\.lock$|\.python-version$|\.github/workflows/ci\.yml$)|\.(py|toml|cfg|ini)$'
 
           decide() {
             echo "code=$1" >> "$GITHUB_OUTPUT"
