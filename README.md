@@ -20,6 +20,8 @@ Candidates must satisfy every eligibility rule:
 - The repository is active and above its configured star threshold.
 - The issue is open and unassigned.
 - Maintainers labeled it `good first issue`, `help wanted`, or an equivalent invitation.
+  Matching ignores case, hyphens, underscores, emoji and a `prefix/`, so `good-first-issue`,
+  `kind/help-wanted` and `good first issue :baby_chick:` all count.
 - No currently open pull request declares that it closes the issue.
 
 Ranking favors explicit beginner-friendly labels, bugs and documentation work, active discussions,
@@ -52,7 +54,15 @@ The token is optional for small scans, but authenticated requests receive a high
 limit. Use a short-lived token and never commit it.
 
 Customize repository targets and minimum popularity thresholds in
-[`config/repositories.json`](config/repositories.json).
+[`config/repositories.json`](config/repositories.json). A target can also list `labels` for a
+project's own invitation labels that the defaults don't cover:
+
+```json
+{ "name": "traefik/traefik", "minimum_stars": 40000, "labels": ["contributor/wanted"] }
+```
+
+The radar reads each repository's labels, then fetches the 100 most recently updated open
+issues under each matching label.
 
 ## Development
 

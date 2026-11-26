@@ -62,10 +62,21 @@ def load_targets(path: Path) -> list[RepositoryTarget]:
             or minimum_stars < 0
         ):
             raise ValueError(f"invalid minimum_stars for {name!r}")
+        labels = raw_target.get("labels", [])
+        if not isinstance(labels, list) or not all(
+            isinstance(label, str) and label.strip() for label in labels
+        ):
+            raise ValueError(f"labels for {name!r} must be a list of non-empty strings")
         if name.casefold() in seen:
             raise ValueError(f"duplicate repository target: {name}")
         seen.add(name.casefold())
-        targets.append(RepositoryTarget(name=name, minimum_stars=minimum_stars))
+        targets.append(
+            RepositoryTarget(
+                name=name,
+                minimum_stars=minimum_stars,
+                labels=tuple(cast(list[str], labels)),
+            )
+        )
 
     if not targets:
         raise ValueError("at least one repository target is required")
