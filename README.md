@@ -53,6 +53,9 @@ GITHUB_TOKEN="$(gh auth token)" uv run contribution-radar
 The token is optional for small scans, but authenticated requests receive a higher GitHub API rate
 limit. Use a short-lived token and never commit it.
 
+The radar scans 8 repositories at a time. Use `--workers 1` to scan one at a time, or up to
+`--workers 16`; higher values risk GitHub's secondary rate limits.
+
 Customize repository targets and minimum popularity thresholds in
 [`config/repositories.json`](config/repositories.json). A target can also list `labels` for a
 project's own invitation labels that the defaults don't cover:

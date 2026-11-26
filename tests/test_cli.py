@@ -146,6 +146,19 @@ def test_parse_args_applies_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert args.config == Path("config/repositories.json")
     assert args.output == Path("REPORT.md")
     assert args.limit == 10
+    assert args.workers == 8
+
+
+@pytest.mark.parametrize("workers", ["0", "17"])
+def test_parse_args_rejects_out_of_range_workers(
+    monkeypatch: pytest.MonkeyPatch, workers: str
+) -> None:
+    """Keep concurrency within what GitHub tolerates."""
+
+    monkeypatch.setattr(sys, "argv", ["contribution-radar", "--workers", workers])
+
+    with pytest.raises(SystemExit):
+        cli.parse_args()
 
 
 def install_fake_radar(
@@ -161,7 +174,7 @@ def install_fake_radar(
     monkeypatch.setattr(
         cli,
         "parse_args",
-        lambda: argparse.Namespace(config=config, output=output, limit=3),
+        lambda: argparse.Namespace(config=config, output=output, limit=3, workers=4),
     )
 
     class FakeRadar:
@@ -178,11 +191,13 @@ def install_fake_radar(
             limit: int,
             now: object,
             on_repository: ScanObserver,
+            max_workers: int,
         ) -> ScanResult:
             """Validate controller inputs and replay canned outcomes."""
 
             assert [target.name for target in targets] == [scan.name for scan in scans]
             assert limit == 3
+            assert max_workers == 4
             assert now is not None
             for scan in scans:
                 on_repository(scan)
@@ -214,6 +229,7 @@ def test_main_orchestrates_generation(
     out = capsys.readouterr().out
     assert "No unassigned" in output.read_text(encoding="utf-8")
     assert "Scanning 2 repositories" in out
+    assert "(4 at a time)" in out
     assert "✓ owner/repo: scanned" in out
     assert "✗ owner/down: failed (HTTP Error 502)" in out
     assert "Scanned 1/2 repositories (0 skipped, 1 failed)" in out

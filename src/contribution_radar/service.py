@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import re
 from collections.abc import Callable, Iterable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 
 from contribution_radar.models import (
@@ -20,6 +21,7 @@ from contribution_radar.models import (
 from contribution_radar.ports import RepositoryGateway, RepositoryGatewayError
 
 ScanObserver = Callable[[RepositoryScan], None]
+MAX_WORKERS = 16
 
 # Keys are normalized label names (see normalize_label).
 CONTRIBUTION_LABEL_WEIGHTS = {
@@ -88,25 +90,38 @@ class ContributionRadar:
         limit: int = 10,
         now: datetime | None = None,
         on_repository: ScanObserver | None = None,
+        max_workers: int = 1,
     ) -> ScanResult:
         """Scan every target, isolating failures so one repository cannot abort the run.
 
-        ``on_repository`` is called as soon as each repository finishes, which lets
-        callers report progress while a long scan is still running.
+        Up to ``max_workers`` repositories are scanned at once, each on its own
+        thread; the gateway must therefore be safe to share between threads.
+        ``on_repository`` is called on the calling thread as each repository
+        finishes, in completion order. The returned result is in configuration
+        order regardless, so reports do not depend on network timing.
         """
 
         if not 1 <= limit <= 50:
             raise ValueError("limit must be between 1 and 50")
+        if not 1 <= max_workers <= MAX_WORKERS:
+            raise ValueError(f"max_workers must be between 1 and {MAX_WORKERS}")
 
         evaluated_at = now or datetime.now(UTC)
-        candidates: list[Candidate] = []
-        scans: list[RepositoryScan] = []
-        for target in targets:
-            repository_candidates, scan = self._scan_repository(target, evaluated_at)
-            candidates.extend(repository_candidates)
-            scans.append(scan)
-            if on_repository is not None:
-                on_repository(scan)
+        outcomes: dict[int, tuple[list[Candidate], RepositoryScan]] = {}
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {
+                pool.submit(self._scan_repository, target, evaluated_at): index
+                for index, target in enumerate(targets)
+            }
+            for future in as_completed(futures):
+                outcome = future.result()
+                outcomes[futures[future]] = outcome
+                if on_repository is not None:
+                    on_repository(outcome[1])
+
+        ordered = [outcomes[index] for index in range(len(targets))]
+        candidates = [candidate for found, _ in ordered for candidate in found]
+        scans = [scan for _, scan in ordered]
 
         candidates.sort(
             key=lambda candidate: (

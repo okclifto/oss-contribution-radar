@@ -13,7 +13,7 @@ from typing import Any, cast
 from contribution_radar.github_client import REPOSITORY_NAME, GitHubClient
 from contribution_radar.models import RepositoryScan, RepositoryTarget, ScanStatus
 from contribution_radar.report import render_report
-from contribution_radar.service import ContributionRadar
+from contribution_radar.service import MAX_WORKERS, ContributionRadar
 
 
 def parse_args() -> argparse.Namespace:
@@ -35,6 +35,14 @@ def parse_args() -> argparse.Namespace:
         help="generated Markdown report path",
     )
     parser.add_argument("--limit", type=int, default=10, choices=range(1, 51))
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=8,
+        choices=range(1, MAX_WORKERS + 1),
+        metavar=f"1-{MAX_WORKERS}",
+        help="repositories scanned at once (default 8; 1 scans sequentially)",
+    )
     return parser.parse_args()
 
 
@@ -167,8 +175,17 @@ def main() -> None:
     generated_at = datetime.now(UTC).replace(microsecond=0)
     radar = ContributionRadar(GitHubClient(token=os.getenv("GITHUB_TOKEN")))
 
-    print(f"Scanning {len(targets)} repositories from {args.config}", flush=True)
-    result = radar.scan(targets, limit=args.limit, now=generated_at, on_repository=report_scan)
+    print(
+        f"Scanning {len(targets)} repositories from {args.config} ({args.workers} at a time)",
+        flush=True,
+    )
+    result = radar.scan(
+        targets,
+        limit=args.limit,
+        now=generated_at,
+        on_repository=report_scan,
+        max_workers=args.workers,
+    )
     report = render_report(result.candidates, generated_at, result.repositories)
     write_report(args.output, report)
 
