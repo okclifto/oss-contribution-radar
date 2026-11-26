@@ -13,7 +13,7 @@ from contribution_radar.models import (
     RepositoryTarget,
     ScanStatus,
 )
-from contribution_radar.service import ContributionRadar
+from contribution_radar.service import ContributionRadar, match_label, normalize_label
 
 NOW = datetime(2026, 9, 16, tzinfo=UTC)
 
@@ -33,6 +33,9 @@ class FakeGateway:
         self.issues = issues or {}
         self.pull_requests = pull_requests or {}
         self.failures: dict[str, Exception] = {}
+        self.extra_labels: dict[str, list[str]] = {}
+        self.issue_requests: list[tuple[str, str]] = []
+        self.pull_request_requests: list[str] = []
 
     def get_repository(self, name: str) -> Repository:
         """Return canned repository metadata, or raise a configured failure."""
@@ -41,14 +44,22 @@ class FakeGateway:
             raise self.failures[name]
         return self.repositories[name]
 
-    def list_open_issues(self, name: str) -> list[Issue]:
-        """Return canned issues."""
+    def list_labels(self, name: str) -> list[str]:
+        """Return every label used by the canned issues, plus any extras."""
 
-        return self.issues.get(name, [])
+        used = {label for issue in self.issues.get(name, []) for label in issue.labels}
+        return sorted(used | set(self.extra_labels.get(name, [])))
+
+    def list_open_issues(self, name: str, label: str) -> list[Issue]:
+        """Return canned issues carrying the label, as GitHub's label filter does."""
+
+        self.issue_requests.append((name, label))
+        return [issue for issue in self.issues.get(name, []) if label in issue.labels]
 
     def list_open_pull_requests(self, name: str) -> list[PullRequest]:
         """Return canned pull requests."""
 
+        self.pull_request_requests.append(name)
         return self.pull_requests.get(name, [])
 
 
@@ -205,7 +216,7 @@ def test_scan_isolates_repository_failures() -> None:
         ("bad name", ScanStatus.FAILED),
     ]
     assert "rate limit exceeded" in result.repositories[0].detail
-    assert result.repositories[1].detail == "2 open items checked, 1 eligible"
+    assert result.repositories[1].detail == "1 open item under 1 label checked, 1 eligible"
     assert result.repositories[1].eligible == 1
     assert result.count(ScanStatus.FAILED) == 2
 
@@ -229,3 +240,105 @@ def test_scan_records_why_repositories_were_skipped() -> None:
         (ScanStatus.SKIPPED, "archived"),
         (ScanStatus.SKIPPED, "99 stars is below the 1,500 minimum"),
     ]
+
+
+PROJECT = Repository("owner/project", "https://github.com/owner/project", 10_000, False)
+
+
+@pytest.mark.parametrize(
+    "label,normalized",
+    [
+        ("Good First Issue", "good first issue"),
+        ("good-first-issue", "good first issue"),
+        ("good_first_issue", "good first issue"),
+        ("good first issue 🐤", "good first issue"),
+        ("help wanted 🆘", "help wanted"),
+        ("good first issue :baby_chick:", "good first issue"),
+        ("help wanted :sos:", "help wanted"),
+        ("kind/help-wanted", "kind/help wanted"),
+        ("  Help   Wanted ", "help wanted"),
+    ],
+)
+def test_normalize_label_ignores_case_separators_and_emoji(label: str, normalized: str) -> None:
+    """Treat common spellings of the same label as equal."""
+
+    assert normalize_label(label) == normalized
+
+
+@pytest.mark.parametrize(
+    "label,key",
+    [
+        ("kind/help-wanted", "help wanted"),
+        ("exp/good-first-issue", "good first issue"),
+        ("good first issue 🐤", "good first issue"),
+        ("not help wanted", None),
+        ("help wanted later", None),
+        ("contributor/wanted", None),
+    ],
+)
+def test_match_label_accepts_prefixes_but_not_partial_words(label: str, key: str | None) -> None:
+    """Match whole labels or labels after a prefix, never fragments."""
+
+    assert match_label(label, ["good first issue", "help wanted"]) == key
+
+
+def test_scan_fetches_only_contribution_labels_and_deduplicates() -> None:
+    """Query each matching label once and count shared issues once."""
+
+    gateway = FakeGateway(
+        repositories={"owner/project": PROJECT},
+        issues={
+            "owner/project": [
+                make_issue(1, labels=("good-first-issue 🐤", "kind/help-wanted", "kind/bug")),
+                make_issue(2, labels=("kind/help-wanted",)),
+                make_issue(3, labels=("question",)),
+            ]
+        },
+    )
+
+    result = ContributionRadar(gateway).scan([RepositoryTarget("owner/project")], now=NOW)
+
+    assert sorted(label for _, label in gateway.issue_requests) == [
+        "good-first-issue 🐤",
+        "kind/help-wanted",
+    ]
+    assert [candidate.issue.number for candidate in result.candidates] == [1, 2]
+    assert result.candidates[0].reasons == (
+        "label: bug",
+        "label: good first issue",
+        "label: help wanted",
+    )
+    assert result.repositories[0].detail == "2 open items under 2 labels checked, 2 eligible"
+
+
+def test_scan_uses_labels_configured_for_the_repository() -> None:
+    """Accept a project's own invitation label when the target lists it."""
+
+    gateway = FakeGateway(
+        repositories={"owner/project": PROJECT},
+        issues={"owner/project": [make_issue(5, labels=("contributor/wanted",))]},
+    )
+    radar = ContributionRadar(gateway)
+
+    default = radar.scan([RepositoryTarget("owner/project")], now=NOW)
+    configured = radar.scan(
+        [RepositoryTarget("owner/project", labels=("Contributor/Wanted",))], now=NOW
+    )
+
+    assert default.candidates == ()
+    assert default.repositories[0].detail == "no contribution labels defined"
+    assert [candidate.issue.number for candidate in configured.candidates] == [5]
+    assert configured.candidates[0].reasons == ("label: contributor/wanted",)
+
+
+def test_scan_skips_pull_request_lookup_without_labeled_issues() -> None:
+    """Avoid the pull request request when no labeled issue is open."""
+
+    gateway = FakeGateway(repositories={"owner/project": PROJECT})
+    gateway.extra_labels = {"owner/project": ["help wanted"]}
+
+    result = ContributionRadar(gateway).scan([RepositoryTarget("owner/project")], now=NOW)
+
+    assert gateway.issue_requests == [("owner/project", "help wanted")]
+    assert gateway.pull_request_requests == []
+    assert result.repositories[0].detail == "0 open items under 1 label checked, 0 eligible"

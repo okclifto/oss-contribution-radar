@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
 
 from contribution_radar.models import (
@@ -21,19 +21,47 @@ from contribution_radar.ports import RepositoryGateway, RepositoryGatewayError
 
 ScanObserver = Callable[[RepositoryScan], None]
 
+# Keys are normalized label names (see normalize_label).
 CONTRIBUTION_LABEL_WEIGHTS = {
     "good first issue": 55.0,
     "help wanted": 40.0,
     "good first contribution": 55.0,
     "contributions welcome": 35.0,
 }
+CONFIGURED_LABEL_WEIGHT = 40.0
 QUALITY_LABEL_WEIGHTS = {
     "bug": 15.0,
     "documentation": 12.0,
     "docs": 12.0,
-    "kind/bug": 15.0,
-    "kind/documentation": 12.0,
 }
+
+_SHORTCODE = re.compile(r":[a-z0-9_+-]+:")
+_SEPARATORS = re.compile(r"[-_\s]+")
+_DECORATION = re.compile(r"[^\w\s/-]")
+
+
+def normalize_label(label: str) -> str:
+    """Reduce a label to a comparable form.
+
+    Case, hyphens, underscores, emoji (including ``:shortcode:`` text) and
+    punctuation are ignored, so ``Good-First-Issue``, ``good first issue 🐤`` and
+    ``good first issue :baby_chick:`` all become ``good first issue``. A
+    ``prefix/`` such as ``kind/`` is kept here and handled by ``match_label``.
+    """
+
+    without_emoji = _SHORTCODE.sub("", label.casefold())
+    without_decoration = _DECORATION.sub("", without_emoji)
+    return _SEPARATORS.sub(" ", without_decoration).strip()
+
+
+def match_label(label: str, keys: Iterable[str]) -> str | None:
+    """Return the key a label matches, directly or after a ``prefix/``."""
+
+    normalized = normalize_label(label)
+    for key in keys:
+        if normalized == key or normalized.endswith(f"/{key}"):
+            return key
+    return None
 
 
 class ContributionRadar:
@@ -107,27 +135,61 @@ class ContributionRadar:
                     f"{repository.stars:,} stars is below the {target.minimum_stars:,} minimum",
                 )
 
-            pull_requests = self._gateway.list_open_pull_requests(target.name)
-            issues = self._gateway.list_open_issues(target.name)
+            weights = self._contribution_weights(target)
+            labels = [
+                label
+                for label in self._gateway.list_labels(target.name)
+                if match_label(label, weights)
+            ]
+            if not labels:
+                return [], RepositoryScan(
+                    target.name, ScanStatus.SCANNED, "no contribution labels defined"
+                )
+
+            # An issue with several matching labels comes back once per label.
+            issues: dict[int, Issue] = {}
+            for label in labels:
+                for issue in self._gateway.list_open_issues(target.name, label):
+                    issues[issue.number] = issue
+            pull_requests = self._gateway.list_open_pull_requests(target.name) if issues else []
         except (RepositoryGatewayError, ValueError) as error:
             return [], RepositoryScan(target.name, ScanStatus.FAILED, str(error))
 
         candidates = [
             candidate
-            for issue in issues
-            if (candidate := self._evaluate(repository, issue, pull_requests, now)) is not None
+            for issue in issues.values()
+            if (candidate := self._evaluate(repository, issue, weights, pull_requests, now))
+            is not None
         ]
         return candidates, RepositoryScan(
             target.name,
             ScanStatus.SCANNED,
-            f"{len(issues)} open items checked, {len(candidates)} eligible",
+            f"{self._plural(len(issues), 'open item')} under "
+            f"{self._plural(len(labels), 'label')} checked, "
+            f"{len(candidates)} eligible",
             eligible=len(candidates),
         )
+
+    @staticmethod
+    def _contribution_weights(target: RepositoryTarget) -> dict[str, float]:
+        """Combine the default contribution labels with the target's own."""
+
+        weights = dict(CONTRIBUTION_LABEL_WEIGHTS)
+        for label in target.labels:
+            weights.setdefault(normalize_label(label), CONFIGURED_LABEL_WEIGHT)
+        return weights
+
+    @staticmethod
+    def _plural(count: int, noun: str) -> str:
+        """Format a count with a simply pluralized noun."""
+
+        return f"{count} {noun}" if count == 1 else f"{count} {noun}s"
 
     def _evaluate(
         self,
         repository: Repository,
         issue: Issue,
+        contribution_weights: dict[str, float],
         pull_requests: list[PullRequest],
         now: datetime,
     ) -> Candidate | None:
@@ -136,21 +198,16 @@ class ContributionRadar:
         if issue.is_pull_request or issue.assignees:
             return None
 
-        labels = {label.casefold() for label in issue.labels}
-        contribution_labels = labels.intersection(CONTRIBUTION_LABEL_WEIGHTS)
+        contribution_labels = self._matched(issue.labels, contribution_weights)
         if not contribution_labels:
             return None
         if self._has_competing_pull_request(repository.name, issue.number, pull_requests):
             return None
 
-        reasons = [
-            f"label: {label}"
-            for label in sorted(contribution_labels | labels.intersection(QUALITY_LABEL_WEIGHTS))
-        ]
-        label_score = sum(CONTRIBUTION_LABEL_WEIGHTS[label] for label in contribution_labels)
-        quality_score = sum(
-            QUALITY_LABEL_WEIGHTS[label] for label in labels.intersection(QUALITY_LABEL_WEIGHTS)
-        )
+        quality_labels = self._matched(issue.labels, QUALITY_LABEL_WEIGHTS)
+        reasons = [f"label: {label}" for label in sorted(contribution_labels | quality_labels)]
+        label_score = sum(contribution_weights[label] for label in contribution_labels)
+        quality_score = sum(QUALITY_LABEL_WEIGHTS[label] for label in quality_labels)
         popularity_score = min(math.log10(max(repository.stars, 1)) * 10.0, 60.0)
         age_days = max((now - issue.updated_at).total_seconds() / 86_400, 0.0)
         freshness_score = max(30.0 - age_days / 6.0, 0.0)
@@ -169,6 +226,12 @@ class ContributionRadar:
             ),
             reasons=tuple(reasons),
         )
+
+    @staticmethod
+    def _matched(labels: Iterable[str], weights: dict[str, float]) -> set[str]:
+        """Return the weighted keys that an issue's labels match."""
+
+        return {key for label in labels if (key := match_label(label, weights)) is not None}
 
     @staticmethod
     def _has_competing_pull_request(

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import gzip
+import http.client
 import json
 import re
-import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime
 from typing import Any, cast
@@ -14,6 +16,8 @@ from contribution_radar.ports import RepositoryGatewayError
 
 REPOSITORY_NAME = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 GITHUB_API_URL = "https://api.github.com"
+PAGE_SIZE = 100
+MAX_LABEL_PAGES = 10
 
 
 class GitHubApiError(RepositoryGatewayError):
@@ -40,12 +44,28 @@ class GitHubClient:
             archived=bool(payload.get("archived", False)),
         )
 
-    def list_open_issues(self, name: str) -> list[Issue]:
-        """Return up to 100 recently updated open issues and pull requests."""
+    def list_labels(self, name: str) -> list[str]:
+        """Return every label name defined in a repository, up to 1,000."""
 
         repository = self._validate_repository_name(name)
+        names: list[str] = []
+        for page in range(1, MAX_LABEL_PAGES + 1):
+            payload = self._request_list(
+                f"/repos/{repository}/labels?per_page={PAGE_SIZE}&page={page}"
+            )
+            names.extend(self._required_string(item, "name") for item in payload)
+            if len(payload) < PAGE_SIZE:
+                break
+        return names
+
+    def list_open_issues(self, name: str, label: str) -> list[Issue]:
+        """Return up to 100 recently updated open issues and pull requests with a label."""
+
+        repository = self._validate_repository_name(name)
+        encoded_label = urllib.parse.quote(label, safe="")
         payload = self._request_list(
-            f"/repos/{repository}/issues?state=open&sort=updated&direction=desc&per_page=100"
+            f"/repos/{repository}/issues?state=open&labels={encoded_label}"
+            f"&sort=updated&direction=desc&per_page={PAGE_SIZE}"
         )
         return [self._parse_issue(repository, item) for item in payload]
 
@@ -53,7 +73,7 @@ class GitHubClient:
         """Return up to 100 open pull requests for duplicate-work detection."""
 
         repository = self._validate_repository_name(name)
-        payload = self._request_list(f"/repos/{repository}/pulls?state=open&per_page=100")
+        payload = self._request_list(f"/repos/{repository}/pulls?state=open&per_page={PAGE_SIZE}")
         return [
             PullRequest(
                 title=self._required_string(item, "title"),
@@ -85,6 +105,8 @@ class GitHubClient:
             f"{GITHUB_API_URL}{path}",
             headers={
                 "Accept": "application/vnd.github+json",
+                # Large issue pages are several hundred KB uncompressed.
+                "Accept-Encoding": "gzip",
                 "User-Agent": "oss-contribution-radar",
                 "X-GitHub-Api-Version": "2022-11-28",
             },
@@ -95,9 +117,14 @@ class GitHubClient:
 
         try:
             with urllib.request.urlopen(request, timeout=self._timeout_seconds) as response:
-                return cast(object, json.load(response))
-        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as error:
-            raise GitHubApiError(f"GitHub request failed for {path}: {error}") from error
+                body = response.read()
+                if response.headers.get("Content-Encoding") == "gzip":
+                    body = gzip.decompress(body)
+                return cast(object, json.loads(body))
+        # OSError covers HTTP and URL errors, timeouts and connections reset mid-read;
+        # ValueError covers a truncated, non-JSON or corrupt gzip body.
+        except (OSError, http.client.HTTPException, ValueError) as error:
+            raise GitHubApiError(f"GitHub request failed for {path}: {error!r}") from error
 
     @staticmethod
     def _validate_repository_name(name: str) -> str:

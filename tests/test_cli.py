@@ -28,6 +28,7 @@ def test_load_targets_validates_and_normalizes_configuration(tmp_path: Path) -> 
             "repositories": [
                 {"name": "owner/one"},
                 {"name": "owner/two", "minimum_stars": 42},
+                {"name": "owner/three", "labels": ["contributor/wanted"]},
             ]
         },
     )
@@ -37,6 +38,7 @@ def test_load_targets_validates_and_normalizes_configuration(tmp_path: Path) -> 
     assert targets == [
         RepositoryTarget("owner/one", 1_000),
         RepositoryTarget("owner/two", 42),
+        RepositoryTarget("owner/three", 1_000, ("contributor/wanted",)),
     ]
 
 
@@ -48,6 +50,8 @@ def test_load_targets_validates_and_normalizes_configuration(tmp_path: Path) -> 
         ({"repositories": ["owner/repo"]}, "must be an object"),
         ({"repositories": [{"name": ""}]}, "non-empty string"),
         ({"repositories": [{"name": "owner/repo", "minimum_stars": True}]}, "minimum_stars"),
+        ({"repositories": [{"name": "owner/repo", "labels": "help"}]}, "labels"),
+        ({"repositories": [{"name": "owner/repo", "labels": [" "]}]}, "labels"),
         (
             {"repositories": [{"name": "Owner/Repo"}, {"name": "owner/repo"}]},
             "duplicate",

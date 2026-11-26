@@ -11,6 +11,8 @@ class RepositoryTarget:
 
     name: str
     minimum_stars: int = 1_000
+    labels: tuple[str, ...] = ()
+    """Extra labels this project uses to invite contributors, e.g. ``contributor/wanted``."""
 
 
 @dataclass(frozen=True, slots=True)
