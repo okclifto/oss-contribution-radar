@@ -6,11 +6,11 @@ import argparse
 import json
 import os
 import tempfile
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, cast
 
-from contribution_radar.github_client import GitHubClient
+from contribution_radar.github_client import REPOSITORY_NAME, GitHubClient
 from contribution_radar.models import RepositoryScan, RepositoryTarget, ScanStatus
 from contribution_radar.report import render_report
 from contribution_radar.service import ContributionRadar
@@ -56,6 +56,8 @@ def load_targets(path: Path) -> list[RepositoryTarget]:
         minimum_stars = raw_target.get("minimum_stars", 1_000)
         if not isinstance(name, str) or not name:
             raise ValueError("repository target name must be a non-empty string")
+        if not REPOSITORY_NAME.fullmatch(name):
+            raise ValueError(f"repository target {name!r} must look like owner/repo")
         if (
             not isinstance(minimum_stars, int)
             or isinstance(minimum_stars, bool)
@@ -80,7 +82,42 @@ def load_targets(path: Path) -> list[RepositoryTarget]:
 
     if not targets:
         raise ValueError("at least one repository target is required")
+    _check_dropped(payload.get("dropped", []), seen)
     return targets
+
+
+def _check_dropped(entries: object, active: set[str]) -> None:
+    """Validate the record of repositories that were checked and dropped.
+
+    The radar never scans these; they document past decisions so a repository is
+    not re-evaluated without reason. A name may not be both active and dropped.
+    """
+
+    if not isinstance(entries, list):
+        raise ValueError("'dropped' must be a list")
+    seen: set[str] = set()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise ValueError("each dropped repository must be an object")
+        name = entry.get("name")
+        if not isinstance(name, str) or not name:
+            raise ValueError("dropped repository name must be a non-empty string")
+        if not REPOSITORY_NAME.fullmatch(name):
+            raise ValueError(f"dropped repository {name!r} must look like owner/repo")
+        dropped_on = entry.get("dropped_on")
+        try:
+            date.fromisoformat(cast(str, dropped_on))
+        except (TypeError, ValueError):
+            raise ValueError(f"dropped_on for {name!r} must be a YYYY-MM-DD date") from None
+        reason = entry.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError(f"dropped repository {name!r} needs a reason")
+        key = name.casefold()
+        if key in active:
+            raise ValueError(f"{name} is listed as both a target and dropped")
+        if key in seen:
+            raise ValueError(f"duplicate dropped repository: {name}")
+        seen.add(key)
 
 
 def write_report(path: Path, content: str) -> None:

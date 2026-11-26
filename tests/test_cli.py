@@ -49,6 +49,8 @@ def test_load_targets_validates_and_normalizes_configuration(tmp_path: Path) -> 
         ({"repositories": []}, "at least one"),
         ({"repositories": ["owner/repo"]}, "must be an object"),
         ({"repositories": [{"name": ""}]}, "non-empty string"),
+        ({"repositories": [{"name": "owner"}]}, "owner/repo"),
+        ({"repositories": [{"name": "owner/repo/extra"}]}, "owner/repo"),
         ({"repositories": [{"name": "owner/repo", "minimum_stars": True}]}, "minimum_stars"),
         ({"repositories": [{"name": "owner/repo", "labels": "help"}]}, "labels"),
         ({"repositories": [{"name": "owner/repo", "labels": [" "]}]}, "labels"),
@@ -70,6 +72,57 @@ def test_load_targets_rejects_invalid_configuration(
 
     with pytest.raises(ValueError, match=error):
         cli.load_targets(config)
+
+
+VALID_TARGET = {"name": "owner/repo"}
+DROPPED = {"name": "owner/old", "dropped_on": "2026-11-26", "reason": "no beginner labels"}
+
+
+def test_load_targets_accepts_dropped_repositories(tmp_path: Path) -> None:
+    """Keep dropped repositories out of the scan while accepting the record."""
+
+    config = tmp_path / "repositories.json"
+    write_json(config, {"repositories": [VALID_TARGET], "dropped": [DROPPED]})
+
+    assert cli.load_targets(config) == [RepositoryTarget("owner/repo")]
+
+
+@pytest.mark.parametrize(
+    "dropped,error",
+    [
+        ({"owner/old": DROPPED}, "must be a list"),
+        (["owner/old"], "must be an object"),
+        ([{**DROPPED, "name": ""}], "non-empty string"),
+        ([{**DROPPED, "name": "old"}], "owner/repo"),
+        ([{**DROPPED, "dropped_on": "26/11/2026"}], "YYYY-MM-DD"),
+        ([{key: value for key, value in DROPPED.items() if key != "dropped_on"}], "YYYY-MM-DD"),
+        ([{**DROPPED, "reason": " "}], "needs a reason"),
+        ([{**DROPPED, "name": "Owner/Repo"}], "both a target and dropped"),
+        ([DROPPED, {**DROPPED, "name": "OWNER/old"}], "duplicate dropped"),
+    ],
+)
+def test_load_targets_rejects_invalid_dropped_entries(
+    tmp_path: Path,
+    dropped: object,
+    error: str,
+) -> None:
+    """Reject a malformed dropped record and names that are also active."""
+
+    config = tmp_path / "repositories.json"
+    write_json(config, {"repositories": [VALID_TARGET], "dropped": dropped})
+
+    with pytest.raises(ValueError, match=error):
+        cli.load_targets(config)
+
+
+def test_shipped_configuration_is_valid() -> None:
+    """Catch a broken config/repositories.json before the daily run does."""
+
+    config = Path(__file__).resolve().parents[1] / "config" / "repositories.json"
+
+    targets = cli.load_targets(config)
+
+    assert targets
 
 
 def test_write_report_creates_parent_and_replaces_content(tmp_path: Path) -> None:

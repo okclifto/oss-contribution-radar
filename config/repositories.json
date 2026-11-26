@@ -1,44 +1,68 @@
 {
   "repositories": [
+    {"name": "anchore/grype", "minimum_stars": 9000},
+    {"name": "anchore/syft", "minimum_stars": 6000},
+    {"name": "ansible/ansible", "minimum_stars": 50000, "labels": ["easyfix"]},
+    {"name": "aquasecurity/trivy", "minimum_stars": 25000},
+    {"name": "argoproj/argo-cd", "minimum_stars": 17000},
+    {"name": "backstage/backstage", "minimum_stars": 24000},
+    {"name": "bitwarden/clients", "minimum_stars": 10000},
+    {"name": "bridgecrewio/checkov", "minimum_stars": 6000, "labels": ["contribution requested"]},
+    {"name": "bytecodealliance/wasmtime", "minimum_stars": 13000},
+    {"name": "caddyserver/caddy", "minimum_stars": 55000},
+    {"name": "cert-manager/cert-manager", "minimum_stars": 9000},
+    {"name": "cilium/cilium", "minimum_stars": 18000},
+    {"name": "cloudflare/pingora", "minimum_stars": 19000},
+    {"name": "containerd/containerd", "minimum_stars": 15000, "labels": ["exp/beginner"]},
+    {"name": "crossplane/crossplane", "minimum_stars": 8000},
+    {"name": "dependency-check/DependencyCheck", "minimum_stars": 5000},
+    {"name": "epi052/feroxbuster", "minimum_stars": 5000},
+    {"name": "external-secrets/external-secrets", "minimum_stars": 4000},
+    {"name": "falcosecurity/falco", "minimum_stars": 6000},
+    {"name": "firecracker-microvm/firecracker", "minimum_stars": 26000},
+    {"name": "fluent/fluentd", "minimum_stars": 9000},
+    {"name": "fluxcd/flux2", "minimum_stars": 5000},
+    {"name": "gitleaks/gitleaks", "minimum_stars": 21000},
+    {"name": "gruntwork-io/terragrunt", "minimum_stars": 5000},
+    {"name": "hashicorp/consul", "minimum_stars": 21000},
+    {"name": "hashicorp/terraform", "minimum_stars": 10000},
+    {"name": "hashicorp/vault", "minimum_stars": 25000},
+    {"name": "helm/helm", "minimum_stars": 20000},
+    {"name": "infracost/infracost", "minimum_stars": 8000},
+    {"name": "keycloak/keycloak", "minimum_stars": 26000},
+    {"name": "kubernetes-sigs/external-dns", "minimum_stars": 8000},
+    {"name": "kyverno/kyverno", "minimum_stars": 5000},
+    {"name": "macro-inc/macro", "minimum_stars": 4000},
+    {"name": "modelcontextprotocol/typescript-sdk", "minimum_stars": 9000},
+    {"name": "NVIDIA/garak", "minimum_stars": 7000},
+    {"name": "ollama/ollama", "minimum_stars": 131000},
+    {"name": "open-policy-agent/opa", "minimum_stars": 8000},
+    {"name": "opentofu/opentofu", "minimum_stars": 10000},
+    {"name": "ory/kratos", "minimum_stars": 9000},
+    {"name": "presidentbeef/brakeman", "minimum_stars": 5000},
+    {"name": "projectdiscovery/nuclei", "minimum_stars": 23000},
+    {"name": "prometheus/prometheus", "minimum_stars": 47000},
+    {"name": "promptfoo/promptfoo", "minimum_stars": 19000},
+    {"name": "pulumi/pulumi", "minimum_stars": 20000},
+    {"name": "qdrant/qdrant", "minimum_stars": 24000},
+    {"name": "rapid7/metasploit-framework", "minimum_stars": 27000, "labels": ["easy"]},
+    {"name": "rclone/rclone", "minimum_stars": 42000},
+    {"name": "rustls/rustls", "minimum_stars": 5000},
+    {"name": "safetensors/safetensors", "minimum_stars": 2000},
+    {"name": "sigstore/cosign", "minimum_stars": 4000},
+    {"name": "smallstep/certificates", "minimum_stars": 6000},
+    {"name": "terraform-docs/terraform-docs", "minimum_stars": 4000},
+    {"name": "terraform-linters/tflint", "minimum_stars": 5000},
+    {"name": "traefik/traefik", "minimum_stars": 45000, "labels": ["contributor/wanted"]},
+    {"name": "trufflesecurity/trufflehog", "minimum_stars": 20000},
+    {"name": "vectordotdev/vector", "minimum_stars": 16000},
+    {"name": "zaproxy/zaproxy", "minimum_stars": 11000}
+  ],
+  "dropped": [
     {
-      "name": "hashicorp/terraform",
-      "minimum_stars": 10000
-    },
-    {
-      "name": "opentofu/opentofu",
-      "minimum_stars": 10000
-    },
-    {
-      "name": "terraform-docs/terraform-docs",
-      "minimum_stars": 4000
-    },
-    {
-      "name": "gruntwork-io/terragrunt",
-      "minimum_stars": 5000
-    },
-    {
-      "name": "terraform-linters/tflint",
-      "minimum_stars": 5000
-    },
-    {
-      "name": "helm/helm",
-      "minimum_stars": 20000
-    },
-    {
-      "name": "ansible/ansible",
-      "minimum_stars": 50000
-    },
-    {
-      "name": "pulumi/pulumi",
-      "minimum_stars": 20000
-    },
-    {
-      "name": "aquasecurity/trivy",
-      "minimum_stars": 25000
-    },
-    {
-      "name": "kubernetes-sigs/external-dns",
-      "minimum_stars": 8000
+      "name": "hashicorp/nomad",
+      "dropped_on": "2026-11-26",
+      "reason": "None of its 156 labels invite contributors (no good first issue, help wanted or equivalent)."
     }
   ]
 }

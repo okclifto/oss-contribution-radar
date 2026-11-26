@@ -61,6 +61,17 @@ project's own invitation labels that the defaults don't cover:
 { "name": "traefik/traefik", "minimum_stars": 40000, "labels": ["contributor/wanted"] }
 ```
 
+Repositories that were checked and deliberately left out go in the `dropped` list with the
+date and the reason, so the decision isn't lost:
+
+```json
+"dropped": [
+  { "name": "hashicorp/nomad", "dropped_on": "2026-11-26", "reason": "No contributor labels." }
+]
+```
+
+The radar never scans dropped repositories, and a name can't be both a target and dropped.
+
 The radar reads each repository's labels, then fetches the 100 most recently updated open
 issues under each matching label.
 
