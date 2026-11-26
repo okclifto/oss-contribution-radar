@@ -4,6 +4,16 @@ on:
   schedule:
     - cron: "0 13 * * *"
   workflow_dispatch:
+  # Rescan when a merge changes what or how the radar scans. REPORT.md is not
+  # listed, so merging the radar's own report pull request never starts a run.
+  push:
+    branches: [main]
+    paths:
+      - "config/**"
+      - "src/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/daily-radar.yml"
 
 permissions:
   contents: write

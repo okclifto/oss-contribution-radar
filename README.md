@@ -30,8 +30,8 @@ report is better than a low-quality recommendation.
 
 ## Daily automation
 
-The `Daily contribution radar` workflow runs at 13:00 UTC every day and can also be started
-manually. It:
+The `Daily contribution radar` workflow runs at 13:00 UTC every day, after any merge to `main`
+that changes the configuration, source code or dependencies, and when started manually. It:
 
 1. Uses GitHub's read-only public API to collect repository and issue metadata.
 2. Generates `REPORT.md`.
