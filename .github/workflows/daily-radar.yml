@@ -19,6 +19,10 @@ permissions:
   contents: write
   pull-requests: write
   actions: write
+  # Required to read other repositories' issues. Without it, a token that has
+  # pull-requests access gets only pull requests back from the issues endpoint,
+  # so every scan silently finds nothing.
+  issues: read
 
 concurrency:
   group: daily-contribution-radar
