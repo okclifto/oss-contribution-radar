@@ -36,10 +36,34 @@ that changes the configuration, source code or dependencies, and when started ma
 1. Uses GitHub's read-only public API to collect repository and issue metadata.
 2. Generates `REPORT.md`.
 3. Publishes the report in the workflow summary.
-4. Opens a pull request with the changed report as `github-actions[bot]`, which merges once checks pass.
+4. Commits the changed report directly to `main`, using a deploy key.
 
-The workflow can write to this repository and open pull requests in it. It cannot modify
-third-party repositories.
+### Credentials
+
+Each credential gets only the access its step needs:
+
+| Credential | Used by | Access |
+|---|---|---|
+| `GITHUB_TOKEN` | the scan | `contents: read` and `issues: read`; it cannot write anything |
+| `RADAR_DEPLOY_KEY` secret | the final push step only | write access to this repository, and a bypass of `main`'s required `ci` check |
+
+The checkout keeps no credentials, and the deploy key is written to a temporary file only
+inside the push step. The report generator and its dependencies never have write access.
+Because the key bypasses the required check, the push step refuses to push unless
+`REPORT.md` is the only changed file. The workflow cannot modify third-party repositories.
+
+### Setup
+
+1. Generate a key pair: `ssh-keygen -t ed25519 -C oss-contribution-radar -N "" -f radar_deploy_key`.
+2. Add `radar_deploy_key.pub` under **Settings → Deploy keys** with **Allow write access**.
+3. Store the private key: `gh secret set RADAR_DEPLOY_KEY < radar_deploy_key`, then delete
+   both files.
+4. Protect `main` with two rulesets, because a bypass applies to every rule in its ruleset:
+   - `guardrails`: block deletion and force-pushes, with no bypass.
+   - `required-checks`: require the `ci` check, with **Deploy keys** as a bypass actor
+     (mode **Always**).
+
+   A leaked key can then add commits without CI, but can't rewrite or delete `main`.
 
 ## Local usage
 
