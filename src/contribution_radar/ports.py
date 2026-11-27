@@ -14,12 +14,16 @@ class RepositoryGateway(Protocol):
 
     def get_repository(self, name: str) -> Repository:
         """Return metadata for one public repository."""
+        ...
 
     def list_labels(self, name: str) -> list[str]:
         """Return the names of every label defined in a repository."""
+        ...
 
     def list_open_issues(self, name: str, label: str) -> list[Issue]:
         """Return recently updated open issues and pull requests carrying one label."""
+        ...
 
     def list_open_pull_requests(self, name: str) -> list[PullRequest]:
         """Return open pull requests used for duplicate-work detection."""
+        ...
