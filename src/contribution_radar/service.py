@@ -91,6 +91,11 @@ LARGE_SIZE_LABELS = (
 SMALL_SIZE_BONUS = 10.0
 LARGE_SIZE_PENALTY = -15.0
 
+# Freshness decays smoothly from FRESHNESS_MAX points on the day an issue is
+# updated, halving every FRESHNESS_HALF_LIFE_DAYS, so each day of quiet counts.
+FRESHNESS_MAX = 30.0
+FRESHNESS_HALF_LIFE_DAYS = 45.0
+
 # Hard limits: older or busier issues are excluded rather than down-ranked.
 MAX_UPDATED_AGE_DAYS = 180
 MAX_COMMENTS = 15
@@ -103,7 +108,7 @@ POPULARITY_FULL_STARS = 100_000
 
 # Ranking limits applied after scoring.
 MINIMUM_SCORE = 40.0
-MAX_PER_REPOSITORY = 2
+MAX_PER_REPOSITORY = 4
 MAX_DOCS_ONLY = 3
 
 SHORT_BODY_CHARACTERS = 200
@@ -386,13 +391,13 @@ class ContributionRadar:
 
     @staticmethod
     def _freshness_score(updated_days: float) -> float:
-        """Reward recent activity: the issue is more likely to still be real."""
+        """Reward recent activity: the issue is more likely to still be real.
 
-        if updated_days <= 30:
-            return 25.0
-        if updated_days <= 90:
-            return 20.0
-        return 10.0
+        The score halves every ``FRESHNESS_HALF_LIFE_DAYS``, so an issue touched
+        this week outranks an otherwise identical one touched last month.
+        """
+
+        return FRESHNESS_MAX * math.pow(0.5, updated_days / FRESHNESS_HALF_LIFE_DAYS)
 
     @staticmethod
     def _discussion_score(comments: int) -> float:

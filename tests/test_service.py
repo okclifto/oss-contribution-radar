@@ -515,12 +515,18 @@ def test_beginner_hint_lifts_a_bare_help_wanted_label() -> None:
 
 @pytest.mark.parametrize(
     ("updated_days_ago", "expected"),
-    [(30, 25.0), (31, 20.0), (90, 20.0), (91, 10.0), (180, 10.0)],
+    [(0, 30.0), (3, 28.6), (30, 18.9), (45, 15.0), (90, 7.5), (180, 1.9)],
 )
-def test_freshness_bands(updated_days_ago: int, expected: float) -> None:
-    """Reward recent activity in bands that end at the 180-day cutoff."""
+def test_freshness_decays_with_a_half_life(updated_days_ago: int, expected: float) -> None:
+    """Halve the freshness reward every 45 days of inactivity."""
 
-    assert ContributionRadar._freshness_score(updated_days_ago) == expected
+    assert round(ContributionRadar._freshness_score(updated_days_ago), 1) == expected
+
+
+def test_freshness_separates_issues_within_the_same_month() -> None:
+    """Rank an issue touched this week above one touched weeks ago."""
+
+    assert ContributionRadar._freshness_score(3) > ContributionRadar._freshness_score(25)
 
 
 @pytest.mark.parametrize(
@@ -652,15 +658,15 @@ def test_scan_skips_disabled_and_forked_repositories(flag: str, detail: str) -> 
     ]
 
 
-def test_ranking_caps_each_repository_at_two() -> None:
+def test_ranking_caps_each_repository_at_four() -> None:
     """Keep one repository from filling the list."""
 
     gateway = FakeGateway(
         repositories={"owner/project": PROJECT},
-        issues={"owner/project": [make_issue(number) for number in range(1, 6)]},
+        issues={"owner/project": [make_issue(number) for number in range(1, 8)]},
     )
     result = ContributionRadar(gateway).scan([RepositoryTarget("owner/project")], now=NOW)
-    assert [candidate.issue.number for candidate in result.candidates] == [1, 2]
+    assert [candidate.issue.number for candidate in result.candidates] == [1, 2, 3, 4]
 
 
 def test_ranking_caps_docs_only_picks_at_three() -> None:
