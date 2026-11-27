@@ -23,6 +23,9 @@ class Repository:
     url: str
     stars: int
     archived: bool
+    pushed_at: datetime | None = None
+    fork: bool = False
+    disabled: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +42,7 @@ class Issue:
     created_at: datetime
     updated_at: datetime
     is_pull_request: bool = False
+    body: str = ""
 
 
 @dataclass(frozen=True, slots=True)

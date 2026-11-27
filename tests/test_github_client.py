@@ -57,6 +57,57 @@ def test_client_normalizes_repository_issues_and_pull_requests(
     assert issues[0].assignees == ("alice",)
     assert issues[0].is_pull_request is True
     assert pull_requests[0].body == ""
+    assert repository.pushed_at is None
+    assert (repository.fork, repository.disabled) == (False, False)
+    assert issues[0].body == ""
+
+
+def test_client_reads_activity_and_issue_bodies(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Parse the push time, fork and disabled flags, and issue bodies when present."""
+
+    responses: dict[str, object] = {
+        "/repos/owner/project": {
+            "full_name": "owner/project",
+            "html_url": "https://github.com/owner/project",
+            "stargazers_count": 5_000,
+            "pushed_at": "2026-09-15T12:00:00Z",
+            "fork": True,
+            "disabled": True,
+        },
+        (
+            "/repos/owner/project/issues?state=open&labels=help%20wanted"
+            "&sort=updated&direction=desc&per_page=100"
+        ): [
+            {
+                "number": 7,
+                "title": "Fix a bug",
+                "html_url": "https://github.com/owner/project/issues/7",
+                "comments": 0,
+                "created_at": "2026-09-01T00:00:00Z",
+                "updated_at": "2026-09-16T00:00:00Z",
+                "body": "Steps to reproduce: run the CLI.",
+            },
+            {
+                "number": 8,
+                "title": "Fix another bug",
+                "html_url": "https://github.com/owner/project/issues/8",
+                "comments": 0,
+                "created_at": "2026-09-01T00:00:00Z",
+                "updated_at": "2026-09-16T00:00:00Z",
+                "body": None,
+            },
+        ],
+    }
+    client = GitHubClient()
+    monkeypatch.setattr(client, "_request", lambda path: responses[path])
+
+    repository = client.get_repository("owner/project")
+    issues = client.list_open_issues("owner/project", "help wanted")
+
+    assert repository.pushed_at is not None
+    assert repository.pushed_at.isoformat() == "2026-09-15T12:00:00+00:00"
+    assert (repository.fork, repository.disabled) == (True, True)
+    assert [issue.body for issue in issues] == ["Steps to reproduce: run the CLI.", ""]
 
 
 def test_list_labels_follows_pages_until_a_short_page(monkeypatch: pytest.MonkeyPatch) -> None:
