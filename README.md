@@ -27,12 +27,13 @@ Candidates must satisfy every eligibility rule:
   and its title doesn't mark it as a tracking issue, RFC or proposal.
 - No currently open pull request references the issue.
 
-Ranking scores the single strongest contribution label, recent activity, a few comments of
-confirmation over silence or a long thread, maintainer size labels such as `size/XS`, a body that
-points to code or gives repro steps, repository activity, and repository popularity, which
-deliberately rewards contributions to bigger projects. Each repository contributes at most two
-picks, documentation-only picks are capped at three, and anything below a minimum score is
-dropped: a short report is better than a padded one.
+Ranking scores the single strongest contribution label, recent activity (a reward that halves every
+45 days without an update), a few comments of confirmation over silence or a long thread,
+maintainer size labels such as `size/XS`, a body that points to code or gives repro steps,
+repository activity, and repository popularity, which deliberately rewards contributions to bigger
+projects. Each repository contributes at most four picks, the report lists up to 25,
+documentation-only picks are capped at three, and anything below a minimum score is dropped: a
+short report is better than a padded one.
 
 ## Daily automation
 

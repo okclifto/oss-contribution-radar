@@ -145,7 +145,7 @@ def test_parse_args_applies_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert args.config == Path("config/repositories.json")
     assert args.output == Path("REPORT.md")
-    assert args.limit == 10
+    assert args.limit == 25
     assert args.workers == 8
 
 

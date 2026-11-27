@@ -34,7 +34,7 @@ def parse_args() -> argparse.Namespace:
         default=Path("REPORT.md"),
         help="generated Markdown report path",
     )
-    parser.add_argument("--limit", type=int, default=10, choices=range(1, 51))
+    parser.add_argument("--limit", type=int, default=25, choices=range(1, 51))
     parser.add_argument(
         "--workers",
         type=int,
