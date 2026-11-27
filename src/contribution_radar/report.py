@@ -77,10 +77,13 @@ def render_report(
         [
             "## Selection policy",
             "",
-            "- The repository is active, public, and above its configured star threshold.",
+            "- The repository is active, public, not a fork, and above its star threshold.",
             "- The issue is open, unassigned, and explicitly welcomes contributions.",
-            "- Open pull requests claiming to close the issue are excluded.",
-            "- Helpful bug or documentation labels improve ranking.",
+            "- It was updated in the last 180 days, has at most 15 comments, and carries no",
+            '  "not ready" label such as `blocked`, `needs-triage` or `question`.',
+            "- Issues referenced by an open pull request are excluded.",
+            "- Ranking favors beginner and size labels, recent activity, clear issue bodies,",
+            "  and bigger projects. Each repository contributes at most two picks.",
             "- No activity is posted to third-party repositories automatically.",
             "",
             "Repository targets are maintained in "

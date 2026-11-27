@@ -64,6 +64,9 @@ class GitHubClient:
             url=self._required_string(payload, "html_url"),
             stars=self._required_int(payload, "stargazers_count"),
             archived=bool(payload.get("archived", False)),
+            pushed_at=self._optional_datetime(payload, "pushed_at"),
+            fork=bool(payload.get("fork", False)),
+            disabled=bool(payload.get("disabled", False)),
         )
 
     def list_labels(self, name: str) -> list[str]:
@@ -255,7 +258,15 @@ class GitHubClient:
             created_at=cls._parse_datetime(cls._required_string(payload, "created_at")),
             updated_at=cls._parse_datetime(cls._required_string(payload, "updated_at")),
             is_pull_request="pull_request" in payload,
+            body=str(payload.get("body") or ""),
         )
+
+    @classmethod
+    def _optional_datetime(cls, payload: dict[str, Any], key: str) -> datetime | None:
+        """Parse a timestamp field that GitHub may omit or return as null."""
+
+        value = payload.get(key)
+        return cls._parse_datetime(value) if isinstance(value, str) else None
 
     @staticmethod
     def _parse_datetime(value: str) -> datetime:

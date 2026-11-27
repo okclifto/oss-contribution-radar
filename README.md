@@ -17,16 +17,22 @@ guide, implement and test a substantive change, and decide whether to submit it.
 
 Candidates must satisfy every eligibility rule:
 
-- The repository is active and above its configured star threshold.
+- The repository is active, not a fork, and above its configured star threshold.
 - The issue is open and unassigned.
 - Maintainers labeled it `good first issue`, `help wanted`, or an equivalent invitation.
   Matching ignores case, hyphens, underscores, emoji and a `prefix/`, so `good-first-issue`,
   `kind/help-wanted` and `good first issue :baby_chick:` all count.
-- No currently open pull request declares that it closes the issue.
+- It was updated in the last 180 days and has at most 15 comments.
+- It carries no "not ready" label such as `blocked`, `needs-triage`, `question` or `wontfix`,
+  and its title doesn't mark it as a tracking issue, RFC or proposal.
+- No currently open pull request references the issue.
 
-Ranking favors explicit beginner-friendly labels, bugs and documentation work, active discussions,
-recent updates, and established repositories. The policy is intentionally conservative: an empty
-report is better than a low-quality recommendation.
+Ranking scores the single strongest contribution label, recent activity, a few comments of
+confirmation over silence or a long thread, maintainer size labels such as `size/XS`, a body that
+points to code or gives repro steps, repository activity, and repository popularity, which
+deliberately rewards contributions to bigger projects. Each repository contributes at most two
+picks, documentation-only picks are capped at three, and anything below a minimum score is
+dropped: a short report is better than a padded one.
 
 ## Daily automation
 
