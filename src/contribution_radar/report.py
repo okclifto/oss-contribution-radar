@@ -68,7 +68,8 @@ def render_report(
         ]
     )
     lines.extend(
-        f"| {_escape(scan.name)} | {STATUS_LABELS[scan.status]} | {_escape(scan.detail)} |"
+        f"| [{_escape(scan.name)}](https://github.com/{scan.name}) "
+        f"| {STATUS_LABELS[scan.status]} | {_escape(scan.detail)} |"
         for scan in repositories
     )
     lines.append("")

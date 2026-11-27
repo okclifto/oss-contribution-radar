@@ -42,8 +42,14 @@ def test_render_report_discloses_automation_and_escapes_content() -> None:
     assert "[#42 Fix pipes \\| and newlines]" in report
     assert "| 123.4 |" in report
     assert "Repositories scanned: **1** of 2" in report
-    assert "| owner/project | ✅ scanned | 5 open items checked |" in report
-    assert "| owner/broken | ❌ failed | HTTP 502 \\| bad gateway |" in report
+    assert (
+        "| [owner/project](https://github.com/owner/project) | ✅ scanned | 5 open items checked |"
+        in report
+    )
+    assert (
+        "| [owner/broken](https://github.com/owner/broken) | ❌ failed | HTTP 502 \\| bad gateway |"
+        in report
+    )
 
 
 def test_render_report_handles_no_candidates() -> None:
@@ -57,5 +63,5 @@ def test_render_report_handles_no_candidates() -> None:
 
     assert "No unassigned, contribution-friendly issues" in report
     assert "Repositories scanned: **0** of 1" in report
-    assert "| owner/old | ⏭️ skipped | archived |" in report
+    assert "| [owner/old](https://github.com/owner/old) | ⏭️ skipped | archived |" in report
     assert "No activity is posted to third-party repositories automatically." in report
